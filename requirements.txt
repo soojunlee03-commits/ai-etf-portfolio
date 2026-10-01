@@ -1,0 +1,7 @@
+streamlit==1.63.0
+pandas==3.0.1
+SQLAlchemy==2.0.54
+psycopg[binary]==3.3.5
+yfinance==1.7.0
+pytest==9.1.1
+exchange-calendars==4.13.2
