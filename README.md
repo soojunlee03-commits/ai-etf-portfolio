@@ -2,6 +2,12 @@
 
 한국어 교육용 ETF 자산배분 대회 앱입니다. SPY·IEF·GLD·VNQ·SGOV 초기 배분, 제출 잠금, 회차별 리밸런싱, 달러/원화 NAV, 공식 순위, 학기 보관과 감사 기록을 제공합니다. 실제 매매와 자동 AI 추천은 없습니다.
 
+## 공개 운영앱
+
+[공개 운영앱 열기](https://ai-etf-portfolio-class.streamlit.app/) · [배포 기록](docs/Production_Deployment_KO.md)
+
+공개 앱은 Neon PostgreSQL에 저장합니다. 로컬 앱의 SQLite와 자동 동기화되지 않으므로 실제 수업 관리는 공개 앱에서 진행하세요.
+
 ## 이 컴퓨터에서 실행
 
 프로젝트 폴더의 PowerShell에서 실행합니다. 가상환경과 최초 관리자 계정이 준비되어 있으므로 재초기화할 필요가 없습니다.
