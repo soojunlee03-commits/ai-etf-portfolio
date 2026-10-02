@@ -124,12 +124,42 @@ def dashboard_table(svc,uid,sid):
     if rows: st.dataframe(pd.DataFrame([{'닉네임':r['display_name'],'아이디':r['username'],'계정':'활성' if r['active'] else '비활성','초기 제출':'완료' if r['initial_submitted'] else '미제출','최근 리밸런싱':'완료' if r['latest_rebalance_submitted'] else '미제출 / 일정 없음','비밀번호 변경 필요':'예' if r['must_change_password'] else '아니요','최근 로그인':display_time(r['last_login_at'])} for r in rows]),hide_index=True,width='stretch')
     else: st.info('등록된 학생이 없습니다. 학생 관리에서 학생을 등록하거나 기존 학생을 수강 등록하세요.')
 
+def semester_summary(svc,uid,s):
+    sid=s['id']; active=svc.selected_semester()
+    enrolled=svc.rows(enrollments,enrollments.c.semester_id==sid)
+    submitted=svc.rows(submissions,submissions.c.semester_id==sid)
+    scheduled=sorted(svc.rows(windows,windows.c.semester_id==sid),key=lambda w:w['effective'])
+    st.header('학기 설정 요약')
+    st.subheader(s['name'])
+    st.caption('현재 선택한 학기에 저장된 설정입니다. 왼쪽 학기 / 수업을 바꾸면 요약도 바뀝니다.')
+    active_name=next((r['name'] for r in svc.available_semesters() if r['id']==active),None)
+    status='이 학기로 지정됨' if active==sid else (f'다른 학기로 지정됨: {active_name}' if active_name else '미지정')
+    rows=[('포트폴리오 시작일',s['start']),('학기 종료일',s['end']),
+          ('초기 자산배분 제출 마감 (한국 시간)',display_time(s['initial_deadline'])),
+          ('기본 운영 학기',status),('순위표 공개 설정','공개' if s['leaderboard'] else '비공개'),
+          ('학기 상태','보관 · 학생 제출 중단' if s['archived'] else '보관하지 않음 · 제출 기간 내 제출 가능'),
+          ('공식 성과',svc.official_status(uid,sid)['state'])]
+    st.table(pd.DataFrame(rows,columns=['항목','저장된 설정']).set_index('항목'))
+    for col,label,value in zip(st.columns(3),['등록 학생','초기 제출','리밸런싱 일정'],
+                              [len(enrolled),sum(r['event_key']=='initial' for r in submitted),len(scheduled)]):
+        col.metric(label,value)
+    if scheduled:
+        st.write('등록된 리밸런싱 일정')
+        st.dataframe(pd.DataFrame([{'회차':w['name'],'시작 (한국 시간)':display_time(w['opens']),
+            '마감 (한국 시간)':display_time(w['closes']),'적용일':w['effective']} for w in scheduled]),hide_index=True,width='stretch')
+    else: st.info('등록된 리밸런싱 일정이 없습니다.')
+    st.caption('순위표는 공개로 설정해도 데이터 점검과 공식 성과 확정이 완료되어야 표시됩니다.')
+    st.divider()
+
+
 def admin_ui(svc,user):
     uid=user['id']; page=st.sidebar.radio('관리자 메뉴',ADMIN_PAGES); choices=svc.available_semesters()
     s=choose_semester(choices,'admin_semester',svc.selected_semester()) if choices else None
     if page=='관리자 사용가이드': guide(True); return
     if page=='학기 / 일정' or not s:
-        semester_admin(svc,uid)
+        if s: semester_summary(svc,uid,s)
+        with st.expander('새 학기 만들기',expanded=not bool(s)):
+            semester_admin(svc,uid)
         deleted=svc.deleted_semesters(uid)
         with st.expander('삭제한 학기 · 휴지통'):
             st.caption('삭제한 학기의 제출·성과·감사 기록은 보존됩니다. 복원하면 다시 조회할 수 있습니다.')
