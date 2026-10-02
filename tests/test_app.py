@@ -72,3 +72,22 @@ def test_student_submission_and_navigation(tmp_path,monkeypatch):
         assert not at.exception and not at.error, page
     assert '순위표' not in at.sidebar.radio[0].options
     assert '학생 관리' not in at.sidebar.radio[0].options
+
+def test_delete_last_semester_and_restore_ui(tmp_path,monkeypatch):
+    url=f'sqlite:///{tmp_path / "trash-ui.db"}'
+    monkeypatch.setenv('DATABASE_URL',url)
+    svc=Service(connect(url)); svc.bootstrap('admin','test-password')
+    admin=svc.login('admin','test-password')
+    svc.create_semester(admin,'Delete me','2027-01-05','2027-06-30','2027-01-04T01:00:00+00:00')
+    at=AppTest.from_file(Path(__file__).resolve().parents[1] / 'app.py').run(timeout=30)
+    at.session_state['uid']=admin; at.session_state['login_time']=time.time()
+    at.run(timeout=30)
+    at.sidebar.radio[0].set_value('학기 / 일정').run(timeout=30)
+    next(t for t in at.text_input if t.label=='삭제할 학기 이름을 정확히 입력').set_value('Delete me')
+    next(c for c in at.checkbox if c.label=='위 학기 전체를 휴지통으로 이동합니다.').check()
+    next(b for b in at.button if b.label=='학기 삭제').click().run(timeout=30)
+    assert not at.exception and not at.error
+    assert svc.available_semesters()==[]
+    next(b for b in at.button if b.label=='학기 복원').click().run(timeout=30)
+    assert not at.exception and not at.error
+    assert svc.available_semesters()[0]['name']=='Delete me'

@@ -16,6 +16,10 @@ semesters = Table('semesters', metadata,
     Column('initial_deadline', String(40), nullable=False),
     Column('leaderboard', Boolean, nullable=False, default=False),
     Column('archived', Boolean, nullable=False, default=False))
+semester_trash = Table('semester_trash', metadata,
+    Column('semester_id', ForeignKey('semesters.id'), primary_key=True),
+    Column('deleted_at', String(40), nullable=False),
+    Column('actor_id', ForeignKey('users.id'), nullable=False))
 enrollments = Table('enrollments', metadata,
     Column('id', Integer, primary_key=True), Column('semester_id', ForeignKey('semesters.id'), nullable=False),
     Column('user_id', ForeignKey('users.id'), nullable=False), UniqueConstraint('semester_id', 'user_id'))

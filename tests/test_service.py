@@ -156,3 +156,32 @@ def test_market_prepend_and_holidays(system):
     assert previous_session('2026-01-02')=='2025-12-31'
     assert sessions('2026-01-01','2026-01-04')==['2026-01-02']
     with pytest.raises(RuleError):svc.store_market(admin,[{**earlier,'day':'2026-01-01'}])
+
+def test_semester_trash_preserves_records_and_blocks_access(system):
+    from portfolio.db import submissions, audit
+    svc,admin,sid,one,two=system
+    submit_initial(svc,one,sid)
+    before=svc.history(one,sid)
+    svc.activate_semester(admin,sid)
+    with pytest.raises(RuleError): svc.delete_semester(one,sid,'Test')
+    with pytest.raises(RuleError): svc.delete_semester(admin,sid,'wrong')
+    assert len(svc.available_semesters())==1
+    svc.delete_semester(admin,sid,'Test')
+    assert svc.available_semesters()==[]
+    assert svc.selected_semester() is None
+    assert len(svc.rows(submissions))==1
+    assert len(svc.rows(users))==3
+    assert svc.deleted_semesters(admin)[0]['id']==sid
+    for action in [lambda:svc.history(one,sid),lambda:submit_initial(svc,two,sid),
+                   lambda:svc.activate_semester(admin,sid),lambda:svc.enroll(admin,one,sid),
+                   lambda:svc.signup_student('new','New',PASSWORD,sid),
+                   lambda:svc.semester_settings(admin,sid,False,False),
+                   lambda:svc.restore_semester(one,sid),lambda:svc.deleted_semesters(one)]:
+        with pytest.raises(RuleError): action()
+    svc.restore_semester(admin,sid)
+    assert svc.history(one,sid)==before
+    assert len(svc.available_semesters())==1
+    assert svc.deleted_semesters(admin)==[]
+    assert svc.selected_semester() is None
+    assert [r['action'] for r in svc.rows(audit)][-2:]==['delete_semester','restore_semester']
+    with pytest.raises(RuleError): svc.restore_semester(admin,sid)

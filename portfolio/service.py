@@ -6,9 +6,9 @@ import math
 import secrets
 from datetime import datetime, timedelta, timezone, date
 from decimal import Decimal, InvalidOperation
-from sqlalchemy import select, insert, update, and_
+from sqlalchemy import select, insert, update, delete, and_
 from sqlalchemy.exc import IntegrityError
-from .db import users, semesters, enrollments, windows, submissions, allocations, snapshots, audit, metadata, login_events, official_runs
+from .db import users, semesters, enrollments, windows, submissions, allocations, snapshots, audit, metadata, login_events, official_runs, semester_trash, settings
 from .operations import Operations
 from .calendar import previous_session, sessions
 
@@ -160,12 +160,13 @@ class Service(Operations):
             raise RuleError('이미 등록된 학생입니다.') from None
 
     def semester(self, c, sid, writable=False):
-        s = c.execute(select(semesters).where(semesters.c.id == sid)).mappings().first()
-        if not s or (writable and s['archived']):
-            raise RuleError('존재하지 않거나 보관된 학기입니다.')
+        s = c.execute(select(semesters).where(semesters.c.id == sid).with_for_update()).mappings().first()
+        if not s or c.execute(select(semester_trash.c.semester_id).where(semester_trash.c.semester_id==sid)).first() or (writable and s['archived']):
+            raise RuleError('존재하지 않거나 삭제·보관된 학기입니다.')
         return s
 
     def access(self, c, uid, sid, student=None):
+        self.semester(c, sid)
         u = self.actor(c, uid)
         target = student if student is not None else uid
         if u['role'] != 'admin' and target != uid:
@@ -173,6 +174,38 @@ class Service(Operations):
         if not c.execute(select(enrollments.c.id).where(and_(enrollments.c.user_id==target, enrollments.c.semester_id==sid))).first():
             raise RuleError('해당 학기에 등록되지 않았습니다.')
         return target
+
+    def available_semesters(self):
+        with self.engine.connect() as c:
+            return [dict(r) for r in c.execute(select(semesters).where(
+                ~semesters.c.id.in_(select(semester_trash.c.semester_id)))).mappings()]
+
+    def deleted_semesters(self, uid):
+        with self.engine.connect() as c:
+            self.actor(c, uid, True)
+            return [dict(r) for r in c.execute(select(semesters).join(
+                semester_trash, semesters.c.id==semester_trash.c.semester_id)).mappings()]
+
+    def delete_semester(self, uid, sid, confirmation):
+        with self.engine.begin() as c:
+            self.actor(c, uid, True)
+            old = dict(self.semester(c, sid))
+            if confirmation != old['name']:
+                raise RuleError('삭제할 학기 이름을 정확히 입력하세요.')
+            c.execute(insert(semester_trash).values(semester_id=sid, deleted_at=now(), actor_id=uid))
+            c.execute(delete(settings).where(and_(settings.c.key=='active_semester', settings.c.value==str(sid))))
+            self.log(c, uid, 'delete_semester', f'semester:{sid}', old,
+                     {'deleted': True}, '학기 삭제 · 휴지통 이동; 연결 기록 보존')
+
+    def restore_semester(self, uid, sid):
+        with self.engine.begin() as c:
+            self.actor(c, uid, True)
+            c.execute(select(semesters).where(semesters.c.id==sid).with_for_update()).first()
+            removed = c.execute(delete(semester_trash).where(semester_trash.c.semester_id==sid))
+            if not removed.rowcount:
+                raise RuleError('휴지통에 없는 학기입니다.')
+            self.log(c, uid, 'restore_semester', f'semester:{sid}', {'deleted': True},
+                     {'deleted': False}, '삭제한 학기 복원; 기본 운영 학기는 별도 선택')
 
     def create_semester(self, uid, name, start, end, deadline):
         start, end = date.fromisoformat(str(start)), date.fromisoformat(str(end))
@@ -359,7 +392,7 @@ class Service(Operations):
             for key in ('password', 'failed', 'locked_until'):
                 u.pop(key, None)
         if sid is not None:
-            for key in ('semesters', 'enrollments', 'windows', 'submissions'):
+            for key in ('semesters', 'enrollments', 'windows', 'submissions', 'semester_trash'):
                 data[key] = [r for r in data[key] if r['id']==sid] if key=='semesters' else [r for r in data[key] if r['semester_id']==sid]
             subids = {r['id'] for r in data['submissions']}
             ids = {r['user_id'] for r in data['enrollments']}

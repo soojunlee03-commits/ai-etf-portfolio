@@ -26,11 +26,13 @@ def password_ui(svc,uid):
 
 def choose_semester(choices,key,active):
     choices=sorted(choices,key=lambda r:(r['id']!=active,-r['id']))
+    previous=st.session_state.get(key)
+    if previous and previous not in choices: st.session_state.pop(key,None)
     return st.sidebar.selectbox('학기 / 수업',choices,format_func=lambda r:r['name']+(' · 보관' if r['archived'] else ''),key=key)
 
 def student_ui(svc,user):
     uid=user['id']; enrolled={r['semester_id'] for r in svc.rows(enrollments,enrollments.c.user_id==uid)}
-    choices=[r for r in svc.rows(semesters) if r['id'] in enrolled]
+    choices=[r for r in svc.available_semesters() if r['id'] in enrolled]
     if not choices: st.info('등록된 학기가 없습니다. 담당 교수자에게 수강 등록을 요청한 뒤 다시 로그인하세요.'); return
     s=choose_semester(choices,'student_semester',svc.selected_semester()); sid=s['id']
     pages=STUDENT_PAGES[:4]+(['순위표'] if s['leaderboard'] else [])+STUDENT_PAGES[4:]
@@ -120,11 +122,19 @@ def dashboard_table(svc,uid,sid):
     else: st.info('등록된 학생이 없습니다. 학생 관리에서 학생을 등록하거나 기존 학생을 수강 등록하세요.')
 
 def admin_ui(svc,user):
-    uid=user['id']; page=st.sidebar.radio('관리자 메뉴',ADMIN_PAGES); choices=svc.rows(semesters)
+    uid=user['id']; page=st.sidebar.radio('관리자 메뉴',ADMIN_PAGES); choices=svc.available_semesters()
     s=choose_semester(choices,'admin_semester',svc.selected_semester()) if choices else None
     if page=='관리자 사용가이드': guide(True); return
     if page=='학기 / 일정' or not s:
         semester_admin(svc,uid)
+        deleted=svc.deleted_semesters(uid)
+        with st.expander('삭제한 학기 · 휴지통'):
+            st.caption('삭제한 학기의 제출·성과·감사 기록은 보존됩니다. 복원하면 다시 조회할 수 있습니다.')
+            if deleted:
+                target=st.selectbox('복원할 학기',deleted,format_func=lambda r:f"{r['name']} (#{r['id']})")
+                if st.button('학기 복원'):
+                    if perform(lambda:svc.restore_semester(uid,target['id']))[0]: finish('학기를 복원했습니다. 운영 학기는 별도로 설정하세요.')
+            else: st.info('삭제한 학기가 없습니다.')
         if not s: return
     sid=s['id']
     if page=='학기 / 일정':
@@ -140,6 +150,17 @@ def admin_ui(svc,user):
             if st.form_submit_button('운영 설정 저장'):
                 if not confirm: st.warning('학생에게 미치는 영향과 보관 전 백업 안내를 확인하고 확인란을 선택하세요.')
                 elif perform(lambda:svc.semester_settings(uid,sid,leaderboard,archive))[0]: finish('운영 설정을 저장했습니다. 운영 현황에서 공개 상태를 확인하세요.')
+        with st.expander('학기 전체 삭제'):
+            count_students=len(svc.rows(enrollments,enrollments.c.semester_id==sid))
+            count_submissions=len(svc.rows(submissions,submissions.c.semester_id==sid))
+            st.warning(f"삭제 대상: {s['name']} · 등록 학생 {count_students}명 · 제출 {count_submissions}건")
+            st.write('삭제하면 학기 선택·회원가입 목록에서 사라지고 학생 조회·제출이 중단됩니다. 학생 계정과 기록은 보존되며 휴지통에서 복원할 수 있습니다.')
+            with st.form(f'delete_semester_{sid}'):
+                name=st.text_input('삭제할 학기 이름을 정확히 입력',key=f'delete_name_{sid}')
+                confirmed=st.checkbox('위 학기 전체를 휴지통으로 이동합니다.',key=f'delete_confirm_{sid}')
+                if st.form_submit_button('학기 삭제'):
+                    if not confirmed: st.warning('삭제 대상을 확인하고 확인란을 선택하세요.')
+                    elif perform(lambda:svc.delete_semester(uid,sid,name))[0]: finish('학기를 삭제했습니다. 삭제한 학기 · 휴지통에서 복원할 수 있습니다.')
         st.subheader('리밸런싱 일정 추가'); st.caption('기본 간격 14일. 시작 < 마감 < 적용일이며 마감의 UTC 날짜는 적용일보다 앞서야 합니다. 한국 시간 전날 저녁 마감을 권장합니다. 등록 일정은 고정됩니다.')
         ws=sorted(svc.rows(windows,windows.c.semester_id==sid),key=lambda w:w['effective']); nextday=date.fromisoformat(ws[-1]['effective'] if ws else s['start'])+timedelta(days=14)
         with st.form('window'):
@@ -280,7 +301,7 @@ def main(database_url=None, demo=False):
                     if ok: st.session_state['uid']=uid; st.session_state['login_time']=datetime.now(timezone.utc).timestamp(); st.rerun()
             st.caption('실패 시 아이디·비밀번호를 확인하세요. 5회 실패하면 15분간 잠깁니다. 문제가 계속되면 담당 교수자에게 문의하세요. 공용 컴퓨터에서는 사용 후 로그아웃하세요.')
             with st.expander('처음 오셨나요? 학생 회원가입'):
-                available={r['id']:r['name'] for r in svc.rows(semesters) if not r['archived']}
+                available={r['id']:r['name'] for r in svc.available_semesters() if not r['archived']}
                 with st.form('student_signup'):
                     st.subheader('학생 회원가입')
                     new_username=st.text_input('사용할 아이디',max_chars=100,help='영문 대소문자는 구분하지 않습니다.')
