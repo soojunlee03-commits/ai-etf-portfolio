@@ -9,7 +9,10 @@ from .ui_helpers import (STUDENT_PAGES,ADMIN_PAGES,display_time,localstamp,perfo
     screen_help,allocation_form,review,draw_performance,show_history,guide)
 
 @st.cache_resource
-def service(url): return Service(connect(url))
+def service(url):
+    # Refresh the cached connection when deploying the semester trash schema.
+    engine = connect(url)
+    return Service(engine)
 
 @st.cache_data(ttl=900,show_spinner=False)
 def fetch_cached(start,end): return fetch(start,end)
