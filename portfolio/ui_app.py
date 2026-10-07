@@ -238,8 +238,15 @@ def admin_ui(svc,user):
                 st.metric('클래스 평균 달러 수익률',f'{sum(r["USD 수익률 %"] for r in board)/len(board):.2f}%'); st.dataframe(pd.DataFrame(board),hide_index=True,width='stretch')
         except RuleError as e: st.info(str(e))
         if rows:
-            target=st.selectbox('학생 포트폴리오 조회',rows,format_func=lambda r:f'{r["display_name"]} ({r["username"]})')
-            draw_performance(svc,uid,sid,target['user_id']); show_history(svc,uid,sid,target['user_id'])
+            st.divider()
+            st.subheader('학생별 성과와 포트폴리오 확인')
+            st.caption('학생을 선택하면 관리자 화면에서 해당 학생의 성과 차트, ETF별 성과, 제출한 목표 비중과 변경 사유를 바로 확인할 수 있습니다.')
+            target=st.selectbox('확인할 학생 선택',rows,format_func=lambda r:f'{r["display_name"]} ({r["username"]})')
+            detail_perf,detail_history=st.tabs(['현재 성과', '포트폴리오 제출 이력'])
+            with detail_perf:
+                draw_performance(svc,uid,sid,target['user_id'])
+            with detail_history:
+                show_history(svc,uid,sid,target['user_id'])
     elif page=='시장 데이터':
         st.header('시장 데이터'); screen_help('무료 ETF 수정종가와 원/달러 환율을 저장합니다.','시작·종료일 또는 검증된 CSV','데이터 상태 → 공식 성과 확정')
         st.info('기존 데이터는 자동 덮어쓰지 않습니다. 오늘 이전 완료 거래일만 가져옵니다. 연결 실패 시 제출 기록은 유지됩니다.')
