@@ -50,7 +50,7 @@ class Service(Operations):
         self.engine = engine
 
     def ensure_late_initial_table(self):
-        late_initial_permissions.create(self.engine, checkfirst=True)
+        metadata.create_all(self.engine, tables=[late_initial_permissions])
 
     def rows(self, table, condition=None):
         with self.engine.connect() as c:

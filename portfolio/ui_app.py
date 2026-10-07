@@ -254,8 +254,15 @@ def admin_ui(svc,user):
                     elif perform(lambda:svc.edit_student(uid,target['id'],name,active,reset))[0]: finish('학생 정보를 저장했습니다. 활성 상태를 확인하세요.')
             with st.expander('마감 후 최초 제출 허용'):
                 st.caption('초기 자산배분 마감 후 아직 제출하지 못한 학생에게 1회 제출 권한을 열어줍니다. 제출 후에는 일반 제출과 동일하게 잠깁니다.')
-                already_submitted=any(r['user_id']==target['id'] and r['initial_submitted'] for r in svc.submission_dashboard(uid,sid)['students'])
-                already_allowed=target['id'] in svc.late_initial_students(uid,sid)
+                already_submitted=False
+                already_allowed=False
+                status_available=True
+                try:
+                    already_submitted=any(r['user_id']==target['id'] and r['initial_submitted'] for r in svc.submission_dashboard(uid,sid)['students'])
+                    already_allowed=target['id'] in svc.late_initial_students(uid,sid)
+                except Exception:
+                    status_available=False
+                    st.warning('현재 저장 상태를 확인하지 못했습니다. 아래 허용 여부를 선택한 뒤 저장을 시도할 수 있습니다.')
                 if already_submitted:
                     st.info('이 학생은 이미 최초 자산배분을 제출했습니다.')
                     st.checkbox('늦은 제출 허용 여부',value=False,disabled=True,key=f'late_allowed_submitted_{target["id"]}_{sid}')
@@ -270,7 +277,9 @@ def admin_ui(svc,user):
                         if st.form_submit_button('허용 여부 저장'):
                             if not allow: st.warning('허용하려면 `늦은 제출 허용 여부`를 체크하세요.')
                             elif not confirm: st.warning('영향을 확인하고 확인란을 선택하세요.')
-                            elif perform(lambda:svc.grant_late_initial_submission(uid,target['id'],sid,reason))[0]: finish('늦은 최초 제출을 허용했습니다. 학생은 내 포트폴리오에서 최초 자산배분을 제출할 수 있습니다.')
+                            else:
+                                if not status_available: st.info('저장 상태를 다시 확인하며 처리합니다. 실패하면 새로고침 후 한 번 더 시도하세요.')
+                                if perform(lambda:svc.grant_late_initial_submission(uid,target['id'],sid,reason))[0]: finish('늦은 최초 제출을 허용했습니다. 학생은 내 포트폴리오에서 최초 자산배분을 제출할 수 있습니다.')
         dashboard_table(svc,uid,sid)
     elif page=='운영 현황':
         st.header('운영 현황'); screen_help('제출 누락과 마감·데이터 경고를 확인합니다.','조회할 학생 선택','미제출 학생 안내 또는 데이터 상태 점검')
