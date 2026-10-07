@@ -49,6 +49,9 @@ class Service(Operations):
     def __init__(self, engine):
         self.engine = engine
 
+    def ensure_late_initial_table(self):
+        late_initial_permissions.create(self.engine, checkfirst=True)
+
     def rows(self, table, condition=None):
         with self.engine.connect() as c:
             q = select(table)
@@ -164,6 +167,7 @@ class Service(Operations):
     def grant_late_initial_submission(self, uid, student, sid, reason):
         if not reason.strip():
             raise RuleError('늦은 제출을 허용하는 사유를 입력하세요.')
+        self.ensure_late_initial_table()
         try:
             with self.engine.begin() as c:
                 self.actor(c, uid, True)
@@ -183,10 +187,19 @@ class Service(Operations):
             raise RuleError('이미 늦은 제출이 허용된 학생입니다.') from None
 
     def late_initial_allowed(self, uid, sid):
+        self.ensure_late_initial_table()
         with self.engine.connect() as c:
             self.access(c, uid, sid)
             return bool(c.execute(select(late_initial_permissions.c.user_id).where(
                 and_(late_initial_permissions.c.semester_id==sid, late_initial_permissions.c.user_id==uid))).first())
+
+    def late_initial_students(self, uid, sid):
+        self.ensure_late_initial_table()
+        with self.engine.connect() as c:
+            self.actor(c, uid, True)
+            self.semester(c, sid)
+            return {r['user_id'] for r in c.execute(select(late_initial_permissions.c.user_id).where(
+                late_initial_permissions.c.semester_id==sid)).mappings()}
 
     def semester(self, c, sid, writable=False):
         s = c.execute(select(semesters).where(semesters.c.id == sid).with_for_update()).mappings().first()
@@ -271,6 +284,8 @@ class Service(Operations):
     def submit(self, uid, sid, values, reason, window_id=None, at=None):
         values = weights(values)
         stamp = at or now()
+        if window_id is None:
+            self.ensure_late_initial_table()
         try:
             with self.engine.begin() as c:
                 u = self.actor(c, uid)

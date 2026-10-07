@@ -2,7 +2,7 @@ import os
 from datetime import date, datetime, time, timedelta, timezone
 import pandas as pd
 import streamlit as st
-from .db import connect, users, semesters, enrollments, windows, submissions, audit, late_initial_permissions
+from .db import connect, users, semesters, enrollments, windows, submissions, audit
 from .service import Service, RuleError, now, ETFS
 from .market import fetch, from_csv
 from .ui_helpers import (STUDENT_PAGES,ADMIN_PAGES,display_time,localstamp,perform,finish,
@@ -124,7 +124,7 @@ def semester_admin(svc,uid):
 def dashboard_table(svc,uid,sid):
     rows=svc.submission_dashboard(uid,sid)['students']
     if rows:
-        late_allowed={r['user_id'] for r in svc.rows(late_initial_permissions,late_initial_permissions.c.semester_id==sid)}
+        late_allowed=svc.late_initial_students(uid,sid)
         table=[]
         for r in rows:
             history=svc.history(uid,sid,r['user_id'])
@@ -255,8 +255,7 @@ def admin_ui(svc,user):
             with st.expander('마감 후 최초 제출 허용'):
                 st.caption('초기 자산배분 마감 후 아직 제출하지 못한 학생에게 1회 제출 권한을 열어줍니다. 제출 후에는 일반 제출과 동일하게 잠깁니다.')
                 already_submitted=any(r['user_id']==target['id'] and r['initial_submitted'] for r in svc.submission_dashboard(uid,sid)['students'])
-                already_allowed=bool(svc.rows(late_initial_permissions,
-                    (late_initial_permissions.c.semester_id==sid) & (late_initial_permissions.c.user_id==target['id'])))
+                already_allowed=target['id'] in svc.late_initial_students(uid,sid)
                 if already_submitted: st.info('이 학생은 이미 최초 자산배분을 제출했습니다.')
                 elif already_allowed: st.success('이미 늦은 최초 제출이 허용된 학생입니다.')
                 else:
