@@ -3,7 +3,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import pandas as pd
 import streamlit as st
 from .db import connect, users, semesters, enrollments, windows, submissions, audit
-from .service import Service, RuleError, now
+from .service import Service, RuleError, now, ETFS
 from .market import fetch, from_csv
 from .ui_helpers import (STUDENT_PAGES,ADMIN_PAGES,display_time,localstamp,perform,finish,
     screen_help,allocation_form,review,draw_performance,show_history,guide)
@@ -121,7 +121,29 @@ def semester_admin(svc,uid):
 
 def dashboard_table(svc,uid,sid):
     rows=svc.submission_dashboard(uid,sid)['students']
-    if rows: st.dataframe(pd.DataFrame([{'닉네임':r['display_name'],'아이디':r['username'],'계정':'활성' if r['active'] else '비활성','초기 제출':'완료' if r['initial_submitted'] else '미제출','최근 리밸런싱':'완료' if r['latest_rebalance_submitted'] else '미제출 / 일정 없음','비밀번호 변경 필요':'예' if r['must_change_password'] else '아니요','최근 로그인':display_time(r['last_login_at'])} for r in rows]),hide_index=True,width='stretch')
+    if rows:
+        table=[]
+        for r in rows:
+            history=svc.history(uid,sid,r['user_id'])
+            perf=svc.performance(uid,sid,r['user_id'])
+            latest_weights=history[-1]['weights'] if history else {}
+            latest_perf=perf[-1] if perf else None
+            table.append({
+                '닉네임':r['display_name'],
+                '아이디':r['username'],
+                '계정':'활성' if r['active'] else '비활성',
+                '초기 제출':'완료' if r['initial_submitted'] else '미제출',
+                '최근 리밸런싱':'완료' if r['latest_rebalance_submitted'] else '미제출 / 일정 없음',
+                '성과 데이터':'수신 완료' if latest_perf else '대기',
+                '성과 기준일':latest_perf['date'] if latest_perf else '없음',
+                'USD 수익률':f'{latest_perf["USD return %"]:+.2f}%' if latest_perf else 'N/A',
+                'KRW 수익률':f'{latest_perf["KRW return %"]:+.2f}%' if latest_perf else 'N/A',
+                **{ticker:f'{latest_weights.get(ticker,0):.1f}%' if latest_weights else 'N/A' for ticker in ETFS},
+                '비밀번호 변경 필요':'예' if r['must_change_password'] else '아니요',
+                '최근 로그인':display_time(r['last_login_at'])
+            })
+        st.caption('성과 데이터는 시장 가격·환율이 들어와 해당 학생의 NAV가 계산될 때 `수신 완료`로 표시됩니다. ETF 비중은 학생이 가장 최근 제출한 목표 비중입니다.')
+        st.dataframe(pd.DataFrame(table),hide_index=True,width='stretch')
     else: st.info('등록된 학생이 없습니다. 학생 관리에서 학생을 등록하거나 기존 학생을 수강 등록하세요.')
 
 def semester_summary(svc,uid,s):
