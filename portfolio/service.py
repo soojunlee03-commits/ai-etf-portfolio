@@ -154,10 +154,12 @@ class Service(Operations):
                 u = c.execute(select(users).where(users.c.id==student)).mappings().first()
                 if not u or u['role'] != 'student':
                     raise RuleError('학생을 선택하세요.')
+                if c.execute(select(enrollments.c.id).where(and_(enrollments.c.user_id==student, enrollments.c.semester_id==sid))).first():
+                    raise RuleError('이미 이 학기에 수강 등록된 학생입니다.')
                 c.execute(insert(enrollments).values(user_id=student, semester_id=sid))
                 self.log(c, uid, 'enroll', student, {}, {'semester': sid}, '수강 등록')
         except IntegrityError:
-            raise RuleError('이미 등록된 학생입니다.') from None
+            raise RuleError('이미 이 학기에 수강 등록된 학생입니다.') from None
 
     def grant_late_initial_submission(self, uid, student, sid, reason):
         if not reason.strip():

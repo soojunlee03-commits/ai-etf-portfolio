@@ -241,7 +241,9 @@ def admin_ui(svc,user):
         students=svc.rows(users,users.c.role=='student')
         if students:
             target=st.selectbox('기존 학생',students,format_func=lambda u:f'{u["name"]} ({u["username"]})')
-            if st.button('선택 학기에 수강 등록'): perform(lambda:svc.enroll(uid,target['id'],sid))
+            enrolled=bool(svc.rows(enrollments,(enrollments.c.semester_id==sid) & (enrollments.c.user_id==target['id'])))
+            if enrolled: st.success('이 학생은 이미 선택한 학기에 수강 등록되어 있습니다. 최초 제출 마감이 지난 경우 아래에서 늦은 제출을 허용하세요.')
+            elif st.button('선택 학기에 수강 등록'): perform(lambda:svc.enroll(uid,target['id'],sid))
             with st.form(f'edit_student_{target["id"]}'):
                 name=st.text_input('닉네임 수정',value=target['name']); active=st.checkbox('계정 활성화',value=target['active'])
                 reset=st.text_input('비밀번호 재설정 (필요할 때만)',type='password',help='8자 이상; 비우면 유지합니다.')
