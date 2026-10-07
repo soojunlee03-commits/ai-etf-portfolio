@@ -2,7 +2,7 @@ import os
 from datetime import date, datetime, time, timedelta, timezone
 import pandas as pd
 import streamlit as st
-from .db import connect, users, semesters, enrollments, windows, submissions, audit
+from .db import connect, users, semesters, enrollments, windows, submissions, audit, late_initial_permissions
 from .service import Service, RuleError, now, ETFS
 from .market import fetch, from_csv
 from .ui_helpers import (STUDENT_PAGES,ADMIN_PAGES,display_time,localstamp,perform,finish,
@@ -58,8 +58,10 @@ def student_ui(svc,user):
         st.caption('마감 시각: '+next_deadline)
         if not s['leaderboard']: st.caption('현재 순위표는 교수자가 비공개로 설정했습니다.')
         if not history:
-            if s['archived'] or now()>s['initial_deadline']: st.warning('초기 자산배분 기간이 종료되었습니다. 새 제출은 저장되지 않습니다. 담당 교수자에게 문의하세요.')
+            late_allowed=svc.late_initial_allowed(uid,sid)
+            if s['archived'] or (now()>s['initial_deadline'] and not late_allowed): st.warning('초기 자산배분 기간이 종료되었습니다. 새 제출은 저장되지 않습니다. 담당 교수자에게 문의하세요.')
             else:
+                if late_allowed and now()>s['initial_deadline']: st.warning('관리자가 이 계정에 늦은 최초 제출을 허용했습니다. 이번 제출 후에는 다시 수정할 수 없습니다.')
                 st.success('지금 해야 할 일: 초기 자산배분을 입력하고 제출해 주세요.')
                 values,valid=allocation_form(f'initial_{sid}')
                 reason=st.text_area('최초 투자 전략 (선택)',placeholder='예: 주식의 성장성과 국채의 안정성을 함께 고려했습니다.',key=f'initial_reason_{sid}')
@@ -122,6 +124,7 @@ def semester_admin(svc,uid):
 def dashboard_table(svc,uid,sid):
     rows=svc.submission_dashboard(uid,sid)['students']
     if rows:
+        late_allowed={r['user_id'] for r in svc.rows(late_initial_permissions,late_initial_permissions.c.semester_id==sid)}
         table=[]
         for r in rows:
             history=svc.history(uid,sid,r['user_id'])
@@ -133,6 +136,7 @@ def dashboard_table(svc,uid,sid):
                 '아이디':r['username'],
                 '계정':'활성' if r['active'] else '비활성',
                 '초기 제출':'완료' if r['initial_submitted'] else '미제출',
+                '늦은 제출 허용':'예' if r['user_id'] in late_allowed else '아니요',
                 '최근 리밸런싱':'완료' if r['latest_rebalance_submitted'] else '미제출 / 일정 없음',
                 '성과 데이터':'수신 완료' if latest_perf else '대기',
                 '성과 기준일':latest_perf['date'] if latest_perf else '없음',
@@ -246,6 +250,20 @@ def admin_ui(svc,user):
                 if st.form_submit_button('학생 정보 저장'):
                     if not confirm: st.warning('학생 접근에 미치는 영향을 확인하고 확인란을 선택하세요.')
                     elif perform(lambda:svc.edit_student(uid,target['id'],name,active,reset))[0]: finish('학생 정보를 저장했습니다. 활성 상태를 확인하세요.')
+            with st.expander('마감 후 최초 제출 허용'):
+                st.caption('초기 자산배분 마감 후 아직 제출하지 못한 학생에게 1회 제출 권한을 열어줍니다. 제출 후에는 일반 제출과 동일하게 잠깁니다.')
+                already_submitted=any(r['user_id']==target['id'] and r['initial_submitted'] for r in svc.submission_dashboard(uid,sid)['students'])
+                already_allowed=bool(svc.rows(late_initial_permissions,
+                    (late_initial_permissions.c.semester_id==sid) & (late_initial_permissions.c.user_id==target['id'])))
+                if already_submitted: st.info('이 학생은 이미 최초 자산배분을 제출했습니다.')
+                elif already_allowed: st.success('이미 늦은 최초 제출이 허용된 학생입니다.')
+                else:
+                    with st.form(f'late_initial_{target["id"]}_{sid}'):
+                        reason=st.text_area('허용 사유',placeholder='예: 질병/접속 오류/수강 등록 지연으로 최초 제출을 하지 못함')
+                        confirm=st.checkbox('마감 후 제출 허용 기록이 감사 로그에 남고, 학생은 1회 최초 제출할 수 있음을 확인했습니다.')
+                        if st.form_submit_button('늦은 최초 제출 허용'):
+                            if not confirm: st.warning('영향을 확인하고 확인란을 선택하세요.')
+                            elif perform(lambda:svc.grant_late_initial_submission(uid,target['id'],sid,reason))[0]: finish('늦은 최초 제출을 허용했습니다. 학생은 내 포트폴리오에서 최초 자산배분을 제출할 수 있습니다.')
         dashboard_table(svc,uid,sid)
     elif page=='운영 현황':
         st.header('운영 현황'); screen_help('제출 누락과 마감·데이터 경고를 확인합니다.','조회할 학생 선택','미제출 학생 안내 또는 데이터 상태 점검')

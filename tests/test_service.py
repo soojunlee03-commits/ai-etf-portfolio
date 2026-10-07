@@ -78,6 +78,12 @@ def test_lock_and_access(system):
 def test_deadline(system):
     svc,admin,sid,one,two=system
     with pytest.raises(RuleError): svc.submit(one,sid,W,'late',at='2026-01-04T11:00:00+00:00')
+    svc.grant_late_initial_submission(admin,one,sid,'접속 오류로 인한 늦은 제출 허용')
+    with pytest.raises(RuleError,match='이미 늦은 제출'):
+        svc.grant_late_initial_submission(admin,one,sid,'중복 허용')
+    svc.submit(one,sid,W,'late allowed',at='2026-01-04T11:00:00+00:00')
+    with pytest.raises(RuleError,match='이미 최초'):
+        svc.grant_late_initial_submission(admin,one,sid,'이미 제출한 학생')
     with pytest.raises(RuleError): svc.submit(one,sid,W,'wrong window',window_id=100)
 
 def test_buy_hold_rebalance_fx(system):

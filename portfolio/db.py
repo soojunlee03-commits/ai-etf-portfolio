@@ -23,6 +23,12 @@ semester_trash = Table('semester_trash', metadata,
 enrollments = Table('enrollments', metadata,
     Column('id', Integer, primary_key=True), Column('semester_id', ForeignKey('semesters.id'), nullable=False),
     Column('user_id', ForeignKey('users.id'), nullable=False), UniqueConstraint('semester_id', 'user_id'))
+late_initial_permissions = Table('late_initial_permissions', metadata,
+    Column('semester_id', ForeignKey('semesters.id'), primary_key=True),
+    Column('user_id', ForeignKey('users.id'), primary_key=True),
+    Column('granted_by', ForeignKey('users.id'), nullable=False),
+    Column('granted_at', String(40), nullable=False),
+    Column('reason', Text, nullable=False))
 windows = Table('windows', metadata,
     Column('id', Integer, primary_key=True), Column('semester_id', ForeignKey('semesters.id'), nullable=False),
     Column('name', String(150), nullable=False), Column('opens', String(40), nullable=False),

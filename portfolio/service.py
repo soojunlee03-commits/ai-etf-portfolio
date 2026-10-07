@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone, date
 from decimal import Decimal, InvalidOperation
 from sqlalchemy import select, insert, update, delete, and_
 from sqlalchemy.exc import IntegrityError
-from .db import users, semesters, enrollments, windows, submissions, allocations, snapshots, audit, metadata, login_events, official_runs, semester_trash, settings
+from .db import users, semesters, enrollments, windows, submissions, allocations, snapshots, audit, metadata, login_events, official_runs, semester_trash, settings, late_initial_permissions
 from .operations import Operations
 from .calendar import previous_session, sessions
 
@@ -159,6 +159,33 @@ class Service(Operations):
         except IntegrityError:
             raise RuleError('이미 등록된 학생입니다.') from None
 
+    def grant_late_initial_submission(self, uid, student, sid, reason):
+        if not reason.strip():
+            raise RuleError('늦은 제출을 허용하는 사유를 입력하세요.')
+        try:
+            with self.engine.begin() as c:
+                self.actor(c, uid, True)
+                self.semester(c, sid, True)
+                u = c.execute(select(users).where(users.c.id==student)).mappings().first()
+                if not u or u['role'] != 'student' or not u['active']:
+                    raise RuleError('활성 학생 계정을 선택하세요.')
+                if not c.execute(select(enrollments.c.id).where(and_(enrollments.c.user_id==student, enrollments.c.semester_id==sid))).first():
+                    raise RuleError('먼저 선택 학기에 수강 등록하세요.')
+                if c.execute(select(submissions.c.id).where(and_(submissions.c.user_id==student, submissions.c.semester_id==sid, submissions.c.event_key=='initial'))).first():
+                    raise RuleError('이미 최초 자산배분을 제출한 학생입니다.')
+                c.execute(insert(late_initial_permissions).values(semester_id=sid, user_id=student,
+                    granted_by=uid, granted_at=now(), reason=reason.strip()))
+                self.log(c, uid, 'grant_late_initial', f'semester:{sid}/student:{student}', {},
+                         {'late_initial_allowed': True, 'reason': reason.strip()}, '최초 자산배분 늦은 제출 허용')
+        except IntegrityError:
+            raise RuleError('이미 늦은 제출이 허용된 학생입니다.') from None
+
+    def late_initial_allowed(self, uid, sid):
+        with self.engine.connect() as c:
+            self.access(c, uid, sid)
+            return bool(c.execute(select(late_initial_permissions.c.user_id).where(
+                and_(late_initial_permissions.c.semester_id==sid, late_initial_permissions.c.user_id==uid))).first())
+
     def semester(self, c, sid, writable=False):
         s = c.execute(select(semesters).where(semesters.c.id == sid).with_for_update()).mappings().first()
         if not s or c.execute(select(semester_trash.c.semester_id).where(semester_trash.c.semester_id==sid)).first() or (writable and s['archived']):
@@ -250,7 +277,9 @@ class Service(Operations):
                 self.access(c, uid, sid)
                 s = self.semester(c, sid, True)
                 if window_id is None:
-                    if stamp > s['initial_deadline']:
+                    late_allowed = bool(c.execute(select(late_initial_permissions.c.user_id).where(
+                        and_(late_initial_permissions.c.semester_id==sid, late_initial_permissions.c.user_id==uid))).first())
+                    if stamp > s['initial_deadline'] and not late_allowed:
                         raise RuleError('최초 배분 제출 기한이 지났습니다.')
                     effective, key = s['start'], 'initial'
                 else:
@@ -392,7 +421,7 @@ class Service(Operations):
             for key in ('password', 'failed', 'locked_until'):
                 u.pop(key, None)
         if sid is not None:
-            for key in ('semesters', 'enrollments', 'windows', 'submissions', 'semester_trash'):
+            for key in ('semesters', 'enrollments', 'windows', 'submissions', 'semester_trash', 'late_initial_permissions'):
                 data[key] = [r for r in data[key] if r['id']==sid] if key=='semesters' else [r for r in data[key] if r['semester_id']==sid]
             subids = {r['id'] for r in data['submissions']}
             ids = {r['user_id'] for r in data['enrollments']}
