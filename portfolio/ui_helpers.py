@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 import logging
 import pandas as pd
@@ -9,7 +9,7 @@ from .service import RuleError, ETFS, weights
 KST=timezone(timedelta(hours=9))
 ROOT=Path(__file__).resolve().parents[1]
 STUDENT_PAGES=['내 포트폴리오','성과','리밸런싱','포트폴리오 이력','사용가이드']
-ADMIN_PAGES=['운영 현황','학생 관리','학기 / 일정','시장 데이터','데이터 상태','정정 / 감사','내보내기 / 백업','관리자 사용가이드']
+ADMIN_PAGES=['운영 현황','학생 성과 / 제출 내역','학생 관리','학기 / 일정','시장 데이터','데이터 상태','정정 / 감사','내보내기 / 백업','관리자 사용가이드']
 
 def display_time(value):
     return datetime.fromisoformat(value).astimezone(KST).strftime('%Y-%m-%d %H:%M KST') if value else '없음'
@@ -53,15 +53,30 @@ def review(values,effective,reason='',previous=None):
     if reason: st.write('사유: '+reason)
     st.warning('최종 제출 후 학생은 수정할 수 없습니다. 오류가 있으면 담당 교수자에게 정정을 요청하세요.')
 
-def draw_performance(svc,uid,sid,student=None):
-    health=svc.health(uid,sid); state=svc.official_status(uid,sid)
-    st.caption(f'데이터 상태: {health["status"]} · 성과 상태: {state["state"]} · 가격·환율 기준일: {health["measurement_date"] or "준비 전"}')
+def performance_health(svc,uid,sid,admin_preview=False):
+    health=svc.health(uid,sid)
+    if admin_preview and not health['ok'] and health['measurement_date']:
+        # Validate the entire saved interval; never bridge an internal price gap.
+        if {i['code'] for i in health['issues']} <= {'missing_prices','stale'}:
+            saved=svc.health(uid,sid,as_of=date.fromisoformat(health['measurement_date']))
+            if saved['ok']:
+                return saved,health['issues']
+    return health,[]
+
+
+def draw_performance(svc,uid,sid,student=None,admin_preview=False):
+    health,delayed=performance_health(svc,uid,sid,admin_preview)
+    state=svc.official_status(uid,sid)
+    if delayed:
+        st.warning(f"최신 가격이 아직 반영되지 않았습니다. {health['measurement_date']}까지 검증된 저장 자료의 참고 성과입니다. 현재 수익률이나 공식 순위로 사용하지 마세요.")
+    display_status='저장 기준일 참고 성과 · 최신 데이터 갱신 필요' if delayed else health['status']
+    st.caption(f'데이터 상태: {display_status} · 성과 상태: {state["state"]} · 가격·환율 기준일: {health["measurement_date"] or "준비 전"}')
     if not health['ok']:
         for issue in health['issues']: st.warning(issue['message'])
         st.info('불완전한 데이터로 오해하지 않도록 성과 표시를 보류합니다. 자산배분은 보존됩니다. 교수자에게 데이터 갱신을 요청하세요.'); return
     perf=svc.performance(uid,sid,student)
     if not perf:
-        st.info('초기 자산배분 제출과 시작일 데이터가 필요합니다. 내 포트폴리오에서 제출 상태를 확인하세요.'); return
+        st.info('초기 자산배분 제출과 시작일의 가격·환율이 있어야 성과를 계산할 수 있습니다. 제출 내역과 시장 데이터를 확인하세요.'); return
     last=perf[-1]; a,b,c=st.columns(3)
     a.metric('포트폴리오 NAV (Portfolio NAV)',f'{last["USD NAV"]:.2f}')
     b.metric('달러 기준 수익률 (USD Return)',f'{last["USD return %"]:+.2f}%')

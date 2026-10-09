@@ -6,13 +6,15 @@ from .db import connect, users, semesters, enrollments, windows, submissions, au
 from .service import Service, RuleError, now, ETFS
 from .market import fetch, from_csv
 from .ui_helpers import (STUDENT_PAGES,ADMIN_PAGES,display_time,localstamp,perform,finish,
-    screen_help,allocation_form,review,draw_performance,show_history,guide)
+    screen_help,allocation_form,review,draw_performance,show_history,guide,performance_health)
 
 @st.cache_resource
+def database_engine(url):
+    return connect(url)
+
 def service(url):
-    # Refresh the cached connection when deploying the semester trash schema.
-    engine = connect(url)
-    return Service(engine)
+    # Cache connections, not Service instances from a previous module reload.
+    return Service(database_engine(url))
 
 @st.cache_data(ttl=900,show_spinner=False)
 def fetch_cached(start,end): return fetch(start,end)
@@ -125,30 +127,46 @@ def dashboard_table(svc,uid,sid):
     rows=svc.submission_dashboard(uid,sid)['students']
     if rows:
         late_allowed=svc.late_initial_students(uid,sid)
+        health,delayed=performance_health(svc,uid,sid,admin_preview=True)
         table=[]
         for r in rows:
             history=svc.history(uid,sid,r['user_id'])
-            perf=svc.performance(uid,sid,r['user_id'])
+            perf=svc.performance(uid,sid,r['user_id']) if health['ok'] else []
             latest_weights=history[-1]['weights'] if history else {}
             latest_perf=perf[-1] if perf else None
             table.append({
                 '닉네임':r['display_name'],
                 '아이디':r['username'],
+                **{ticker:f'{latest_weights.get(ticker,0):.1f}%' if latest_weights else 'N/A' for ticker in ETFS},
                 '계정':'활성' if r['active'] else '비활성',
                 '초기 제출':'완료' if r['initial_submitted'] else '미제출',
                 '늦은 제출 허용':'예' if r['user_id'] in late_allowed else '아니요',
                 '최근 리밸런싱':'완료' if r['latest_rebalance_submitted'] else '미제출 / 일정 없음',
-                '성과 데이터':'수신 완료' if latest_perf else '대기',
+                '성과 데이터':('저장 기준일 참고 성과' if delayed else '계산 가능') if latest_perf else ('초기 미제출' if not history else '가격·환율 확인 필요'),
+                '최근 제출일':display_time(history[-1]['submitted_at']) if history else '없음',
+                '최근 적용일':history[-1]['effective'] if history else '없음',
+                '최근 제출 사유':history[-1]['reason'] if history else '',
                 '성과 기준일':latest_perf['date'] if latest_perf else '없음',
                 'USD 수익률':f'{latest_perf["USD return %"]:+.2f}%' if latest_perf else 'N/A',
                 'KRW 수익률':f'{latest_perf["KRW return %"]:+.2f}%' if latest_perf else 'N/A',
-                **{ticker:f'{latest_weights.get(ticker,0):.1f}%' if latest_weights else 'N/A' for ticker in ETFS},
                 '비밀번호 변경 필요':'예' if r['must_change_password'] else '아니요',
                 '최근 로그인':display_time(r['last_login_at'])
             })
-        st.caption('성과 데이터는 시장 가격·환율이 들어와 해당 학생의 NAV가 계산될 때 `수신 완료`로 표시됩니다. ETF 비중은 학생이 가장 최근 제출한 목표 비중입니다.')
+        st.caption('수익률은 표시된 성과 기준일까지의 계산입니다. 가격이 없어도 저장된 제출 비중·사유는 표시됩니다. ETF 비중은 최근 제출 목표이며 실제 보유 비중과 다를 수 있습니다.')
         st.dataframe(pd.DataFrame(table),hide_index=True,width='stretch')
     else: st.info('등록된 학생이 없습니다. 학생 관리에서 학생을 등록하거나 기존 학생을 수강 등록하세요.')
+
+def student_details(svc,uid,sid,rows):
+    if not rows: return
+    st.divider()
+    st.subheader('학생별 성과와 포트폴리오 확인')
+    target=st.selectbox('확인할 학생 선택',rows,format_func=lambda r:f'{r["display_name"]} ({r["username"]})',key=f'student_detail_{sid}')
+    detail_history,detail_perf=st.tabs(['포트폴리오 제출 이력','현재 성과'])
+    with detail_history:
+        show_history(svc,uid,sid,target['user_id'])
+    with detail_perf:
+        draw_performance(svc,uid,sid,target['user_id'],admin_preview=True)
+
 
 def semester_summary(svc,uid,s):
     sid=s['id']; active=svc.selected_semester()
@@ -182,6 +200,10 @@ def admin_ui(svc,user):
     uid=user['id']; page=st.sidebar.radio('관리자 메뉴',ADMIN_PAGES); choices=svc.available_semesters()
     s=choose_semester(choices,'admin_semester',svc.selected_semester()) if choices else None
     if page=='관리자 사용가이드': guide(True); return
+    if not s:
+        st.info('조회할 학기가 없습니다. 아직 학기를 만들지 않았거나 모든 학기가 휴지통에 있습니다. 아래에서 학기를 생성하거나 복원하면 학생·성과 메뉴를 사용할 수 있습니다.')
+        if os.environ.get('PORTFOLIO_LOCAL_DEV')=='1':
+            st.caption('이 로컬 DB에는 공개앱 학생 기록이 자동으로 들어오지 않습니다. 실제 수업 기록은 공개앱에서 확인하세요.')
     if page=='학기 / 일정' or not s:
         if s: semester_summary(svc,uid,s)
         with st.expander('새 학기 만들기',expanded=not bool(s)):
@@ -293,16 +315,13 @@ def admin_ui(svc,user):
             if board:
                 st.metric('클래스 평균 달러 수익률',f'{sum(r["USD 수익률 %"] for r in board)/len(board):.2f}%'); st.dataframe(pd.DataFrame(board),hide_index=True,width='stretch')
         except RuleError as e: st.info(str(e))
-        if rows:
-            st.divider()
-            st.subheader('학생별 성과와 포트폴리오 확인')
-            st.caption('학생을 선택하면 관리자 화면에서 해당 학생의 성과 차트, ETF별 성과, 제출한 목표 비중과 변경 사유를 바로 확인할 수 있습니다.')
-            target=st.selectbox('확인할 학생 선택',rows,format_func=lambda r:f'{r["display_name"]} ({r["username"]})')
-            detail_perf,detail_history=st.tabs(['현재 성과', '포트폴리오 제출 이력'])
-            with detail_perf:
-                draw_performance(svc,uid,sid,target['user_id'])
-            with detail_history:
-                show_history(svc,uid,sid,target['user_id'])
+        student_details(svc,uid,sid,rows)
+    elif page=='학생 성과 / 제출 내역':
+        st.header('학생 성과 / 제출 내역')
+        st.caption(f"선택 학기: {s['name']} · 다른 수업은 왼쪽 학기 / 수업에서 선택하세요.")
+        st.info('최종 제출하여 저장된 비중·투자 전략·리밸런싱 사유를 확인합니다. 제출 전 입력 중인 내용은 저장되지 않아 표시되지 않습니다.')
+        dashboard_table(svc,uid,sid)
+        student_details(svc,uid,sid,svc.submission_dashboard(uid,sid)['students'])
     elif page=='시장 데이터':
         st.header('시장 데이터'); screen_help('무료 ETF 수정종가와 원/달러 환율을 저장합니다.','시작·종료일 또는 검증된 CSV','데이터 상태 → 공식 성과 확정')
         st.info('기존 데이터는 자동 덮어쓰지 않습니다. 오늘 이전 완료 거래일만 가져옵니다. 연결 실패 시 제출 기록은 유지됩니다.')
@@ -368,6 +387,8 @@ def main(database_url=None, demo=False):
         except FileNotFoundError: pass
     svc=service(url); st.title('AI ETF Portfolio Competition'); st.caption('한 학기 동안 배우는 자산배분 · 달러와 원화 성과 · 기록하는 투자 판단')
     if demo or os.environ.get('APP_DEMO')=='1': st.warning('체험용 데모 · 가상 학생과 합성 가격입니다. 실제 수업 DB와 분리되어 있으며 실제 투자 성과가 아닙니다.')
+    if os.environ.get('PORTFOLIO_LOCAL_DEV')=='1':
+        st.info('집 PC 로컬 테스트 앱입니다. 공개앱 계정·비밀번호와 별개입니다. 로컬 최초 로그인 정보는 프로젝트의 data/home-admin-access.txt에서 확인하세요.')
     if st.session_state.get('notice'): st.success(st.session_state.pop('notice'))
     if not svc.rows(users): st.info('관리자 초기 설정이 필요합니다. 서버 운영자가 setup_admin.py를 한 번 실행하면 로그인할 수 있습니다. 학생은 교수자에게 앱 URL을 확인하세요.'); return
     uid=st.session_state.get('uid')
